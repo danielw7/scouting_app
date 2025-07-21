@@ -1,0 +1,457 @@
+library(shiny)
+library(DT)
+library(ggplot2)
+library(plotly)
+library(fmsb)
+library(shinyBS)
+library(shinyscreenshot)
+
+csv_file <- "./player_ratings.csv"
+
+# Initialize empty data frame to hold all ratings
+ratings_store <- reactiveValues()
+
+if (file.exists(csv_file)) {
+  ratings_store$data <- read.csv(csv_file, stringsAsFactors = FALSE)
+} else {
+  ratings_store$data <- data.frame()
+}
+
+
+ui <- fluidPage(
+  
+  tags$style(HTML("
+  .tooltip-inner {
+    max-width: 600px !important;
+    min-width: 200px !important;
+    white-space: normal !important;
+    word-wrap: break-word !important;
+    padding: 10px 15px !important;
+    font-size: 14px !important;
+    line-height: 1.3 !important;
+  }
+")),
+  
+  titlePanel("⚽ Transfer Fit Scouting System"),
+  tabsetPanel(
+    tabPanel("Player Rating",
+             sidebarLayout(
+               sidebarPanel(
+                 selectizeInput("player_name", "Player Name", choices = NULL, 
+                                selected = NULL, options = list(create = TRUE, 
+                                  placeholder = 'Type or select player')),
+                 selectizeInput("club_name", "Destination Club", choices = NULL, 
+                                selected = NULL, options = list(create = TRUE, 
+                                  placeholder = 'Type or select club')),
+                 
+                 
+                 h4("General"),
+                 sliderInput("potential", "Potential", 1, 5, 1),
+                 bsTooltip("potential", "1 = Prospect, 5 = Star", 
+                  placement = "right", trigger = "hover"),
+                 
+                 sliderInput("injuries", "Injury History", 1, 5, 1),
+                 bsTooltip("injuries", 
+                  "1 = Already had serious injuries, 5 = Plays nearly always", 
+                    placement = "right", trigger = "hover"),
+                 
+                 sliderInput("environment", "Change of environment", 1, 5, 1),
+                 bsTooltip("environment", 
+                  "1 = Moving to new continent, 5 = Transfer within same league", 
+                    placement = "right", trigger = "hover"),
+                 
+                 sliderInput("mentality", "Mentality", 1, 5, 1),
+                 bsTooltip("mentality", 
+                  "1 = Still a child, 5 = Strong team player", 
+                    placement = "right", trigger = "hover"),
+                 
+                 sliderInput("transfer_fee", "Transfer Fee vs Market Value", 1, 5, 1),
+                 bsTooltip("transfer_fee", "1 = Way too much, 5 = Bargain", 
+                  placement = "right", trigger = "hover"),
+                 
+                 h4("Position Fit"),
+                 sliderInput("competition", "Positional Competition", 1, 5, 1),
+                 bsTooltip("competition", 
+                  "1 = Strong competition on favourite position, 5 = Safe starter", 
+                    placement = "right", trigger = "hover"),
+                 
+                 sliderInput("versatility", "Positional Versatility", 1, 5, 1),
+                 bsTooltip("versatility", 
+                  "1 = Can only play one position, 5 = Can play everywhere", 
+                    placement = "right", trigger = "hover"),
+                 
+                 sliderInput("system_fit", "Tactical System Fit", 1, 5, 1),
+                 bsTooltip("system_fit", 
+                  "1 = Completely new system, 5 = Knows the coach", 
+                    placement = "right", trigger = "hover"),
+                 
+                 h4("Club Environment"),
+                 sliderInput("coach_continuity", "Coaching Continuity", 1, 5, 1),
+                 bsTooltip("coach_continuity", 
+                  "1 = More than 1 coach per season, 5 = History of long-term coaches", 
+                    placement = "right", trigger = "hover"),
+                 
+                 sliderInput("squad_size", "Squad Size", 1, 3, 1),
+                 bsTooltip("squad_size", 
+                  "1 = Too large, 3 = Balanced and sufficient", 
+                    placement = "right", trigger = "hover"),
+                 
+                 sliderInput("club_pressure", "Club Pressure / Prestige", 1, 5, 1),
+                 bsTooltip("club_pressure", "1 = Real Madrid, 5 = SC Freiburg", 
+                    placement = "right", trigger = "hover"),
+                 
+                 sliderInput("player_integration", "Player Integration", 1, 5, 1),
+                 bsTooltip("player_integration", "1 = ManU, 5 = LFC", 
+                           placement = "right", trigger = "hover"),
+                 
+                 actionButton("save_rating", "Save Player Rating", 
+                              class = "btn-primary")
+               ),
+               mainPanel(
+                 h3("Score Summary"),
+                 textOutput("overall_score"),
+                 plotOutput("radar_plot", height = "600px", width = "100%")
+               )
+             )),
+    
+    tabPanel("Ratings Table",
+             DTOutput("ratings_table")
+    ),
+    
+    tabPanel("Visualizations",
+             fluidPage(
+               selectInput("multi_players", 
+                           "Select Player-Club Combinations to Compare (up to 4)", 
+                           choices = NULL, multiple = TRUE, selectize = TRUE),
+               
+               actionButton("screenshot_btn", "Download Radar Plot"),
+               
+               # Wrap the plot in a container with an ID
+               div(id = "radar_plot_container",
+                   plotOutput("multi_radar_plot", height = "1000px", width = "100%")
+               )
+             )
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  
+  # Define scales (min/max for each slider)
+  scales <- list(
+    potential = c(1, 5),
+    injuries = c(1, 5),
+    environment = c(1, 5),
+    mentality = c(1, 5),
+    transfer_fee = c(1, 5),
+    competition = c(1, 5),
+    versatility = c(1, 5),
+    system_fit = c(1, 5),
+    coach_continuity = c(1, 5),
+    squad_size = c(1, 3),
+    club_pressure = c(1, 5),
+    player_integration = c(1, 5)
+  )
+  
+  # Store for player ratings
+  player_data <- reactive({
+    raw_scores <- c(
+      potential = input$potential,
+      injuries = input$injuries,
+      environment = input$environment,
+      mentality = input$mentality,
+      transfer_fee = input$transfer_fee,
+      competition = input$competition,
+      versatility = input$versatility,
+      system_fit = input$system_fit,
+      coach_continuity = input$coach_continuity,
+      squad_size = input$squad_size,
+      club_pressure = input$club_pressure,
+      player_integration = input$player_integration
+    )
+    
+    # Normalize each score to 0-1 based on its scale
+    normalized_scores <- mapply(function(val, range) {
+      (val - range[1]) / (range[2] - range[1])
+    }, val = raw_scores, range = scales)
+    
+    # Compute total normalized score and scale to 100
+    total_score <- round(mean(normalized_scores) * 100, 1)
+    
+    list(
+      name = input$player_name,
+      club = input$club_name,
+      score = total_score,
+      details = raw_scores  # Keep raw values for radar and table
+    )
+  })
+  
+  # Save button logic
+  observeEvent(input$save_rating, {
+    entry <- player_data()
+    
+    new_row <- data.frame(
+      Player = entry$name,
+      Club = entry$club,
+      Score = entry$score,
+      potential = entry$details["potential"],
+      injuries = entry$details["injuries"],
+      environment = entry$details["environment"],
+      mentality = entry$details["mentality"],
+      transfer_fee = entry$details["transfer_fee"],
+      competition = entry$details["competition"],
+      versatility = entry$details["versatility"],
+      system_fit = entry$details["system_fit"],
+      coach_continuity = entry$details["coach_continuity"],
+      squad_size = entry$details["squad_size"],
+      club_pressure = entry$details["club_pressure"],
+      player_integration = entry$details["player_integration"],
+      stringsAsFactors = FALSE
+    )
+    
+    # Check if player+club combination already exists in the data
+    existing_idx <- which(ratings_store$data$Player == entry$name & 
+                            ratings_store$data$Club == entry$club)
+    
+    
+    if (length(existing_idx) > 0) {
+      showNotification("This player is already rated for this club.", type = "warning")
+    } else {
+      # Add as a new row
+      ratings_store$data <- rbind(ratings_store$data, new_row)
+      write.csv(ratings_store$data, csv_file, row.names = FALSE)
+      showNotification("New player rating saved!", type = "message")
+    }
+    
+    
+    # Save to CSV
+    write.csv(ratings_store$data, csv_file, row.names = FALSE)
+  })
+  
+  observe({
+    df <- ratings_store$data
+    if (nrow(df) == 0) return()
+    
+    # Create unique labels: "Player (Club)"
+    combined_labels <- paste0(df$Player, " (", df$Club, ")")
+    names(combined_labels) <- combined_labels  # Label == Value
+    
+    updateSelectInput(session, "multi_players",
+                      choices = combined_labels,
+                      selected = NULL)
+  })
+  
+  observe({
+    updateSelectizeInput(session, "player_name",
+                         choices = unique(ratings_store$data$Player),
+                         selected = "", server = TRUE)
+    
+    updateSelectizeInput(session, "club_name",
+                         choices = unique(ratings_store$data$Club),
+                         selected = "", server = TRUE)
+  })
+  
+  # Output score
+  output$overall_score <- renderText({
+    entry <- player_data()
+    paste("Overall Transfer Fit Score:", entry$score, "/ 100")
+  })
+  
+  # Radar chart
+  # Radar chart with normalized values
+  output$radar_plot <- renderPlot({
+    req(input$player_name)
+    entry <- player_data()
+    
+    # Label mapping
+    label_map <- c(
+      potential = "Potential",
+      injuries = "Injury History",
+      environment = "Change of Environment",
+      mentality = "Mentality",
+      transfer_fee = "Fee vs. Market Value",
+      competition = "Positional Competition",
+      versatility = "Versatility",
+      system_fit = "Tactical System Fit",
+      coach_continuity = "Coaching Continuity",
+      squad_size = "Squad Size",
+      club_pressure = "Club Pressure / Prestige",
+      player_integration = "Player Integration"
+    )
+    
+    ordered_keys <- c(
+      "potential", "injuries", "environment", "mentality", "transfer_fee",   
+      "competition", "versatility", "system_fit",                            
+      "coach_continuity", "squad_size", "club_pressure", "player_integration"
+    )
+    
+    raw_scores <- entry$details
+    
+    # Ensure raw_scores is a named numeric vector
+    raw_scores <- as.numeric(raw_scores[ordered_keys])
+    names(raw_scores) <- ordered_keys
+    
+    # Normalize the raw scores using defined scales
+    norm_scores <- mapply(function(val, range) {
+      (val - range[1]) / (range[2] - range[1])
+    }, val = raw_scores, range = scales)
+    
+    norm_scores <- as.numeric(norm_scores)
+    names(norm_scores) <- names(scales[ordered_keys])
+    
+    norm_scores <- as.numeric(norm_scores)
+    names(norm_scores) <- ordered_keys
+    
+    # fmsb expects the first two rows to define max and min
+    data <- as.data.frame(rbind(
+      rep(1, length(norm_scores)),
+      rep(0, length(norm_scores)),
+      norm_scores
+    ))
+    colnames(data) <- label_map[ordered_keys]
+    
+    fmsb::radarchart(data,
+              axistype = 1,
+              caxislabels = NULL,
+              vlabels = label_map[ordered_keys],
+              vlcex = 1.2,
+              pcol = "darkblue",
+              pfcol = rgb(0.1, 0.5, 0.8, 0.4),
+              plwd = 3,
+              cglcol = "grey",
+              cglty = 1,
+              axislabcol = "grey",
+              cglwd = 1.2)
+  })
+  
+  # Ratings Table
+  output$ratings_table <- renderDT({
+    df <- ratings_store$data
+    
+    # Normalize all applicable columns
+    norm_df <- df
+    for (col in names(scales)) {
+      rng <- scales[[col]]
+      norm_df[[col]] <- (df[[col]] - rng[1]) / (rng[2] - rng[1])
+    }
+    
+    datatable(norm_df, filter = "top", options = list(pageLength = 10), 
+              editable = TRUE, rownames = FALSE)
+  })
+  
+  # Edit Values in Table
+  observeEvent(input$ratings_table_cell_edit, {
+    info <- input$ratings_table_cell_edit
+    i <- info$row
+    j <- info$col + 1  # DT columns are 0-indexed, R data.frame 1-indexed
+    
+    # Get column name for clarity
+    colname <- colnames(ratings_store$data)[j]
+    
+    # Original column class
+    col_class <- class(ratings_store$data[[colname]])
+    
+    # Coerce edited value properly:
+    new_val <- switch(
+      col_class,
+      integer = as.integer(info$value),
+      numeric = as.numeric(info$value),
+      character = as.character(info$value),
+      factor = factor(info$value, levels = levels(ratings_store$data[[colname]])),
+      info$value # fallback
+    )
+    
+    ratings_store$data[i, j] <- new_val
+    
+    # Save updated data to CSV
+    write.csv(ratings_store$data, csv_file, row.names = FALSE)
+    
+    showNotification("Table updated and saved!", type = "message")
+  })
+  
+  # Comparison Radar plot
+  output$multi_radar_plot <- renderPlot({
+    req(input$multi_players)
+    players <- input$multi_players[1:4]  # Max 4
+    
+    par(mfrow = c(2, 2), mar = c(1, 2, 2, 1))  # 2x2 layout, adjust margins
+    
+    for (label in players) {
+      # Extract player and club from label: "Player (Club)"
+      matches <- regmatches(label, regexec("^(.*) \\((.*)\\)$", label))[[1]]
+      if (length(matches) != 3) next
+      
+      player <- matches[2]
+      club <- matches[3]
+      
+      df <- ratings_store$data
+      entry <- df[df$Player == player & df$Club == club, ]
+      
+      if (nrow(entry) == 0) next
+      
+      raw_vals <- entry[1, names(scales), drop = TRUE]  # FIXED
+      if (any(is.na(raw_vals)) || !all(sapply(raw_vals, is.numeric))) {
+        message(paste("Skipping", player, "- invalid or missing scores"))
+        next
+      }
+      
+      raw_scores <- as.numeric(raw_vals)
+      names(raw_scores) <- names(scales)
+      
+      norm_scores <- mapply(function(val, range) {
+        (val - range[1]) / (range[2] - range[1])
+      }, val = raw_scores, range = scales, SIMPLIFY = TRUE)
+      
+      radar_data <- as.data.frame(rbind(
+        rep(1, length(norm_scores)),
+        rep(0, length(norm_scores)),
+        norm_scores
+      ))
+      colnames(radar_data) <- names(norm_scores)
+      
+      axis_labels <- c("Potential", "Injury History", "Change of Environment", 
+                       "Mentality", "Fee vs Market Value", "Positional Competition", 
+                       "Versatility", "Tactical Fit", "Coach Continuity", 
+                       "Squad Size", "Club Pressure", "Integration")
+      
+      title_text <- paste0(player, " (", club, ") - Score: ", entry$Score)
+      
+      score <- entry$Score[1]
+      
+      # Define color based on score
+      color <- if (score >= 70) {
+        "darkgreen"
+      } else if (score >= 45) {
+        "orange"
+      } else {
+        "red"
+      }
+      
+      radarchart(radar_data,
+                 axistype = 1,
+                 pcol = color,
+                 pfcol = adjustcolor(color, alpha.f = 0.4),
+                 plwd = 2,
+                 cglcol = "grey",
+                 cglty = 1,
+                 axislabcol = "grey",
+                 vlcex = 1.2,
+                 calcex = 1.2,
+                 vlabels = axis_labels,
+                 title = title_text)
+      
+    }
+  })
+  
+  observeEvent(input$screenshot_btn, {
+    shinyscreenshot::screenshot(
+      selector = "#radar_plot_container",
+      filename = paste0("radar_plot_", Sys.Date()),
+      scale = 3  # Optional: for higher resolution
+    )
+  })
+  
+  
+}
+
+shinyApp(ui = ui, server = server)
