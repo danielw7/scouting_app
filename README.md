@@ -9,6 +9,7 @@ This is an interactive R Shiny application for evaluating football player transf
 - Normalize ratings to generate consistent scores
 - Compare up to 4 players using radar plots with performance color cues
 - Export radar plots as high-resolution images
+- Visualize and export a scatterplot with projected fit vs. projected fee
 - Tooltips to explain rating scales
 - Responsive, tab-based layout:
   - **Player Rating**: Input and save ratings
@@ -29,7 +30,6 @@ This is an interactive R Shiny application for evaluating football player transf
    shiny::runApp()
 
 ## To Do / Improvements
-- Add projected/realized transfer fee and plot
 - Enable rating of clubs or coaches
 - Export full player database
 

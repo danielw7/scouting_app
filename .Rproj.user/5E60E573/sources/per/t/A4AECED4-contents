@@ -5,6 +5,7 @@ library(plotly)
 library(fmsb)
 library(shinyBS)
 library(shinyscreenshot)
+library(ggrepel)
 
 csv_file <- "./player_ratings.csv"
 
@@ -43,7 +44,9 @@ ui <- fluidPage(
                  selectizeInput("club_name", "Destination Club", choices = NULL, 
                                 selected = NULL, options = list(create = TRUE, 
                                   placeholder = 'Type or select club')),
-                 
+                 numericInput("projected_fee", 
+                              "(Projected) Transfer Fee (in million €):", 
+                              value = NA, min = 0, step = 1),
                  
                  h4("General"),
                  sliderInput("potential", "Potential", 1, 5, 1),
@@ -131,7 +134,17 @@ ui <- fluidPage(
                    plotOutput("multi_radar_plot", height = "1000px", width = "100%")
                )
              )
-    )
+    ),
+    tabPanel("Market View",
+             selectInput("market_players", 
+                         "Select Players to View:", 
+                         choices = NULL, multiple = TRUE),
+             
+             actionButton("scatter_screenshot_btn", "Download Scatter Plot"),
+             
+             div(id = "scatter_plot_container",
+                 plotOutput("market_scatter", height = "600px", width = "100%")
+    ))
   )
 )
 
@@ -193,6 +206,7 @@ server <- function(input, output, session) {
     new_row <- data.frame(
       Player = entry$name,
       Club = entry$club,
+      TransferFee = input$projected_fee,
       Score = entry$score,
       potential = entry$details["potential"],
       injuries = entry$details["injuries"],
@@ -237,6 +251,11 @@ server <- function(input, output, session) {
     names(combined_labels) <- combined_labels  # Label == Value
     
     updateSelectInput(session, "multi_players",
+                      choices = combined_labels,
+                      selected = NULL)
+    
+    # 🔹 Update new market scatter dropdown
+    updateSelectInput(session, "market_players",
                       choices = combined_labels,
                       selected = NULL)
   })
@@ -328,14 +347,14 @@ server <- function(input, output, session) {
   output$ratings_table <- renderDT({
     df <- ratings_store$data
     
-    # Normalize all applicable columns
-    norm_df <- df
-    for (col in names(scales)) {
-      rng <- scales[[col]]
-      norm_df[[col]] <- (df[[col]] - rng[1]) / (rng[2] - rng[1])
-    }
+    # # Normalize all applicable columns
+    # norm_df <- df
+    # for (col in names(scales)) {
+    #   rng <- scales[[col]]
+    #   norm_df[[col]] <- (df[[col]] - rng[1]) / (rng[2] - rng[1])
+    # }
     
-    datatable(norm_df, filter = "top", options = list(pageLength = 10), 
+    datatable(df, filter = "top", options = list(pageLength = 10), 
               editable = TRUE, rownames = FALSE)
   })
   
@@ -362,6 +381,18 @@ server <- function(input, output, session) {
     )
     
     ratings_store$data[i, j] <- new_val
+    
+    # ✅ Recalculate the score for that row
+    row_data <- ratings_store$data[i, names(scales)]
+    
+    if (all(sapply(row_data, is.numeric))) {
+      normalized_scores <- mapply(function(val, range) {
+        (val - range[1]) / (range[2] - range[1])
+      }, val = as.numeric(row_data), range = scales)
+      
+      new_score <- round(mean(normalized_scores) * 100, 1)
+      ratings_store$data$Score[i] <- new_score
+    }
     
     # Save updated data to CSV
     write.csv(ratings_store$data, csv_file, row.names = FALSE)
@@ -451,6 +482,43 @@ server <- function(input, output, session) {
     )
   })
   
+  # Scatterplot
+  output$market_scatter <- renderPlot({
+    req(input$market_players)
+    
+    df <- ratings_store$data
+    selected <- input$market_players
+    
+    matches <- regmatches(selected, regexec("^(.*) \\((.*)\\)$", selected))[[1]]
+    if (length(matches) != 3) return(NULL)
+    
+    player <- matches[2]
+    club <- matches[3]
+    
+    data <- df[df$Player == player & df$Club == club, ]
+    if (nrow(data) == 0) return(NULL)
+    
+    plot_data <- df[df$Player %in% sapply(input$market_players, function(label) {
+      regmatches(label, regexec("^(.*) \\(", label))[[1]][2]
+    }), ]
+    
+    plot_data$Label <- paste0(plot_data$Player, " (", plot_data$Club, ")")
+    
+    ggplot(plot_data, aes(x = Score, y = TransferFee)) +
+      geom_point(color = "steelblue", size = 3) +
+      geom_text_repel(aes(label = Label), size = 4.5, max.overlaps = 100) +
+      labs(x = "Projected Fit", y = "Transfer Fee (Million €)",
+           title = "Market Overview: Fit vs Transfer Fee") +
+      theme_minimal(base_size = 14)
+  })
+  
+  observeEvent(input$scatter_screenshot_btn, {
+    shinyscreenshot::screenshot(
+      selector = "#scatter_plot_container",
+      filename = paste0("scatter_plot_", Sys.Date()),
+      scale = 3  # High resolution
+    )
+  })
   
 }
 
